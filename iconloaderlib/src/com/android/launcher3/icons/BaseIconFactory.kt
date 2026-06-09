@@ -45,6 +45,7 @@ import com.android.launcher3.util.UserIconInfo.Companion.TYPE_WORK
 import com.android.systemui.shared.Flags.extendibleThemeManager
 import java.lang.ref.WeakReference
 import kotlin.annotation.AnnotationRetention.SOURCE
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.sqrt
@@ -275,11 +276,94 @@ constructor(
     @JvmOverloads
     fun wrapToAdaptiveIcon(icon: Drawable, options: IconOptions? = null): AdaptiveIconDrawable =
         icon as? AdaptiveIconDrawable
-            ?: AdaptiveIconDrawable(
-                    ColorDrawable(options?.wrapperBackgroundColor ?: DEFAULT_WRAPPER_BACKGROUND),
-                    icon.wrapIntoSquareDrawable(LEGACY_ICON_SCALE),
-                )
+            ?: run {
+                    val fallbackBg = options?.wrapperBackgroundColor ?: DEFAULT_WRAPPER_BACKGROUND
+                    val background = detectEdgeColor(icon) ?: fallbackBg
+                    AdaptiveIconDrawable(
+                        ColorDrawable(background),
+                        icon.wrapIntoSquareDrawable(LEGACY_ICON_SCALE),
+                    )
+                }
                 .apply { setBounds(0, 0, 1, 1) }
+
+    /**
+     * Detect the dominant edge color of a non-adaptive icon by sampling pixels along the four
+     * mid-line edges of a 32×32 downsampled bitmap. If the edge colors are similar and sufficiently
+     * opaque, return that color to use as the adaptive icon background — eliminating white borders.
+     *
+     * Based on work by fatboy1513.
+     */
+    private fun detectEdgeColor(icon: Drawable): Int? {
+        val bm = iconToBitmap(icon, 32) ?: return null
+        try {
+            val left = getFirstValidColor(bm, DIR_LEFT)
+            val top = getFirstValidColor(bm, DIR_TOP)
+            val right = getFirstValidColor(bm, DIR_RIGHT)
+            if ((top and -0x1000000) > -0x12000000 &&
+                rgbSimilar(top, left) &&
+                rgbSimilar(top, right)
+            ) {
+                return top
+            }
+            return null
+        } finally {
+            bm.recycle()
+        }
+    }
+
+    /**
+     * Scan from one edge toward the center along the middle line (y=16 or x=16) and return the
+     * first pixel that is not transparent, pure white, or pure black.
+     */
+    private fun getFirstValidColor(bm: Bitmap, dir: Int): Int {
+        when (dir) {
+            DIR_LEFT -> {
+                for (x in 0 until 16) {
+                    val color = bm.getPixel(x, 16)
+                    if (color != 0 && color != -0x1 && color != -0x1000000) return color
+                }
+            }
+            DIR_TOP -> {
+                for (y in 0 until 16) {
+                    val color = bm.getPixel(16, y)
+                    if (color != 0 && color != -0x1 && color != -0x1000000) return color
+                }
+            }
+            DIR_RIGHT -> {
+                for (x in 31 downTo 16) {
+                    val color = bm.getPixel(x, 16)
+                    if (color != 0 && color != -0x1 && color != -0x1000000) return color
+                }
+            }
+            DIR_BOTTOM -> {
+                for (y in 31 downTo 16) {
+                    val color = bm.getPixel(16, y)
+                    if (color != 0 && color != -0x1 && color != -0x1000000) return color
+                }
+            }
+        }
+        return 0
+    }
+
+    /** Check if two colors are visually similar — per-channel RGB tolerance of 32. */
+    private fun rgbSimilar(color1: Int, color2: Int): Boolean {
+        val r1 = (color1 shr 16) and 0xff
+        val r2 = (color2 shr 16) and 0xff
+        val g1 = (color1 shr 8) and 0xff
+        val g2 = (color2 shr 8) and 0xff
+        val b1 = color1 and 0xff
+        val b2 = color2 and 0xff
+        return abs(r1 - r2) < 32 && abs(g1 - g2) < 32 && abs(b1 - b2) < 32
+    }
+
+    /** Render a drawable into a small ARGB_8888 bitmap for pixel sampling. */
+    private fun iconToBitmap(drawable: Drawable, size: Int): Bitmap? {
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        drawable.setBounds(0, 0, size, size)
+        drawable.draw(canvas)
+        return bitmap
+    }
 
     private fun drawableToBitmap(
         icon: Drawable,
@@ -457,6 +541,12 @@ constructor(
 
     companion object {
         private const val DEFAULT_WRAPPER_BACKGROUND = Color.WHITE
+
+        // Direction constants for edge color sampling
+        private const val DIR_LEFT = 0
+        private const val DIR_TOP = 1
+        private const val DIR_RIGHT = 2
+        private const val DIR_BOTTOM = 3
 
         // Ratio of icon visible area to full icon size for a square shaped icon
         private const val MAX_SQUARE_AREA_FACTOR = 375.0 / 576
