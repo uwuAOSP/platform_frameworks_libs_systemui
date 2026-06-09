@@ -287,19 +287,21 @@ constructor(
                 .apply { setBounds(0, 0, 1, 1) }
 
     /**
-     * Detect the dominant edge color of a non-adaptive icon by sampling pixels along the four
-     * mid-line edges of a 32×32 downsampled bitmap. If the edge colors are similar and sufficiently
-     * opaque, return that color to use as the adaptive icon background — eliminating white borders.
+     * Detect the dominant edge color of a non-adaptive icon by sampling multiple pixels along
+     * each edge of a 32×32 downsampled bitmap. If the averaged edge colors are sufficiently
+     * opaque and similar, return that color to use as the adaptive icon background —
+     * eliminating white borders on wrapped icons.
      *
-     * Based on work by fatboy1513.
+     * Multi-point sampling handles gradient edges and icons with thin borders where a single
+     * midline pixel might miss the actual background color.
      */
     private fun detectEdgeColor(icon: Drawable): Int? {
         val bm = iconToBitmap(icon, 32) ?: return null
         try {
-            val left = getFirstValidColor(bm, DIR_LEFT)
-            val top = getFirstValidColor(bm, DIR_TOP)
-            val right = getFirstValidColor(bm, DIR_RIGHT)
-            if ((top and -0x1000000) > -0x12000000 &&
+            val top = averageEdgeColor(bm, DIR_TOP)
+            val left = averageEdgeColor(bm, DIR_LEFT)
+            val right = averageEdgeColor(bm, DIR_RIGHT)
+            if ((top ushr 24) >= 0xEE &&
                 rgbSimilar(top, left) &&
                 rgbSimilar(top, right)
             ) {
@@ -312,37 +314,35 @@ constructor(
     }
 
     /**
-     * Scan from one edge toward the center along the middle line (y=16 or x=16) and return the
-     * first pixel that is not transparent, pure white, or pure black.
+     * Sample multiple pixels along one edge of a 32×32 bitmap and return the average color,
+     * skipping transparent, pure white, and pure black pixels.
      */
-    private fun getFirstValidColor(bm: Bitmap, dir: Int): Int {
-        when (dir) {
-            DIR_LEFT -> {
-                for (x in 0 until 16) {
-                    val color = bm.getPixel(x, 16)
-                    if (color != 0 && color != -0x1 && color != -0x1000000) return color
-                }
+    private fun averageEdgeColor(bm: Bitmap, dir: Int): Int {
+        var rSum = 0L
+        var gSum = 0L
+        var bSum = 0L
+        var count = 0
+        for (i in SAMPLE_POSITIONS) {
+            val (x, y) = when (dir) {
+                DIR_LEFT -> Pair(0, i)
+                DIR_TOP -> Pair(i, 0)
+                DIR_RIGHT -> Pair(31, i)
+                DIR_BOTTOM -> Pair(i, 31)
+                else -> continue
             }
-            DIR_TOP -> {
-                for (y in 0 until 16) {
-                    val color = bm.getPixel(16, y)
-                    if (color != 0 && color != -0x1 && color != -0x1000000) return color
-                }
-            }
-            DIR_RIGHT -> {
-                for (x in 31 downTo 16) {
-                    val color = bm.getPixel(x, 16)
-                    if (color != 0 && color != -0x1 && color != -0x1000000) return color
-                }
-            }
-            DIR_BOTTOM -> {
-                for (y in 31 downTo 16) {
-                    val color = bm.getPixel(16, y)
-                    if (color != 0 && color != -0x1 && color != -0x1000000) return color
-                }
-            }
+            val c = bm.getPixel(x, y)
+            // Skip transparent, pure white, pure black
+            if (c == 0 || c == -0x1 || c == -0x1000000) continue
+            rSum += (c shr 16) and 0xff
+            gSum += (c shr 8) and 0xff
+            bSum += c and 0xff
+            count++
         }
-        return 0
+        if (count == 0) return 0
+        return -0x1000000 or
+            ((rSum / count).toInt() shl 16) or
+            ((gSum / count).toInt() shl 8) or
+            (bSum / count).toInt()
     }
 
     /** Check if two colors are visually similar — per-channel RGB tolerance of 32. */
@@ -547,6 +547,8 @@ constructor(
         private const val DIR_TOP = 1
         private const val DIR_RIGHT = 2
         private const val DIR_BOTTOM = 3
+        // Sample positions along each edge (in a 32×32 bitmap)
+        private val SAMPLE_POSITIONS = intArrayOf(10, 13, 16, 19, 22)
 
         // Ratio of icon visible area to full icon size for a square shaped icon
         private const val MAX_SQUARE_AREA_FACTOR = 375.0 / 576
