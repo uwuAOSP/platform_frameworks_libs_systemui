@@ -150,7 +150,7 @@ constructor(
      * @return a bitmap suitable for displaying as an icon at various system UIs.
      */
     @JvmOverloads
-    fun createBadgedIconBitmap(icon: Drawable?, options: IconOptions = IconOptions()): BitmapInfo {
+    open fun createBadgedIconBitmap(icon: Drawable?, options: IconOptions = IconOptions()): BitmapInfo {
         if (icon == null) {
             return BitmapInfo(
                 icon =
